@@ -55,6 +55,7 @@ ZEND_GET_MODULE(funcmap)
 #define FUNCMAP_MESSAGE_PATTERN "%message%"
 
 static HashTable funcmap_hash;
+static HashTable namespaces;
 int funcmap_execute_initialized = 0;
 int funcmap_enabled_real = 0;
 time_t funcmap_next_flush_time = 0;
@@ -251,6 +252,10 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
         zend_string_free(old);
   } ZEND_HASH_FOREACH_END();
 
+  ZEND_HASH_FOREACH_STR_KEY(&namespaces, key) {
+      printf("%s\n", ZSTR_VAL(key));
+  } ZEND_HASH_FOREACH_END();
+
   zend_hash_clean(&funcmap_hash);
 }
 /* }}} */
@@ -290,6 +295,7 @@ static void php_funcmap_atfork_child(void) /* {{{ */
 PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("funcmap.enabled",         "0", PHP_INI_SYSTEM, OnUpdateBool, enabled, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.log_format",       "{\"@timestamp\": \"%timestamp%\", \"@version\": 1, \"host\": \"%hostname%\", \"message\": \"%message%\"}\n", PHP_INI_ALL, OnUpdateString, log_format, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.namespaces",       "Ext\\,Test\\,One\\\\Two", PHP_INI_ALL, OnUpdateString, namespaces, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.probability",     "100", PHP_INI_SYSTEM, OnUpdateLong, probability, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.flush_interval_sec", "0", PHP_INI_ALL, OnUpdateLong, flush_interval_sec, zend_funcmap_globals, funcmap_globals)
 PHP_INI_END()
@@ -307,7 +313,28 @@ PHP_MINIT_FUNCTION(funcmap)
 	}
 
 	REGISTER_INI_ENTRIES();
-	return SUCCESS;
+
+        zend_hash_init(&namespaces, 1024, NULL, NULL, 1 /* persistent */);
+
+        zend_string *zs_namespaces = zend_string_init(FUNCMAP_G(namespaces), strlen(FUNCMAP_G(namespaces)), 0);
+        if (ZSTR_LEN(zs_namespaces) > 0) {
+          zend_string *delim = zend_string_init(",", 1, 0);
+
+          zval return_value;
+          zend_try_array_init(&return_value);
+
+          php_explode(delim, zs_namespaces, &return_value, 50);
+          zend_string_free(zs_namespaces);
+
+          zval *val2;
+          ZEND_HASH_FOREACH_VAL(return_value.value.arr, val2) {
+            zend_hash_str_add_empty_element(&namespaces, ZSTR_VAL(val2->value.str), ZSTR_LEN(val2->value.str));
+          } ZEND_HASH_FOREACH_END();
+
+          zend_hash_release(Z_ARRVAL(return_value));
+        }
+
+        return SUCCESS;
 }
 /* }}} */
 
@@ -322,6 +349,7 @@ PHP_MSHUTDOWN_FUNCTION(funcmap)
 			php_funcmap_write_and_cleanup_map();
 		}
 		zend_hash_destroy(&funcmap_hash);
+		zend_hash_destroy(&namespaces);
 	}
 
         UNREGISTER_INI_ENTRIES();
