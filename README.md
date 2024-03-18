@@ -2,6 +2,8 @@
 Problem: how to detect unused/dead legacy functions in production code?
 Solution: collect all the functions that ARE used and remove them from the list of functions available. What's left is unused.
 
+#TODO update readme
+
 funcmap is a simple PHP extension that collects names of all userspace functions that's been called and writes them down to a text file from time to time.
 To reduce the resource usage, you can limit the probability of that event.
 
