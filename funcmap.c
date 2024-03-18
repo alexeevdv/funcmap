@@ -178,8 +178,6 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
 {
   zend_string *old, *new, *key = NULL;
 
-  old = zend_string_init(FUNCMAP_G(log_format), strlen(FUNCMAP_G(log_format)), 0);
-
   char hostname[256];
   if (gethostname(hostname, sizeof(hostname))) {
     // php_error_docref(NULL, E_WARNING, "Unable to fetch host [%d]: %s", errno, strerror(errno));
@@ -194,21 +192,23 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
   }
 
   ZEND_HASH_FOREACH_STR_KEY(&funcmap_hash, key) {
-    // Replace %timestamp%
-    new = php_str_to_str(
-        ZSTR_VAL(old),
-        ZSTR_LEN(old),
-        FUNCMAP_TIMESTAMP_PATTERN,
-        sizeof(FUNCMAP_TIMESTAMP_PATTERN) - 1,
-        ZSTR_VAL(timestamp),
-        ZSTR_LEN(timestamp)
-    );
+      old = zend_string_init(FUNCMAP_G(log_format), strlen(FUNCMAP_G(log_format)), 0);
 
-    if (!new) {
-      break; // TODO log error
-    }
-    zend_string_free(old);
-    old = new;
+      // Replace %timestamp%
+      new = php_str_to_str(
+          ZSTR_VAL(old),
+          ZSTR_LEN(old),
+          FUNCMAP_TIMESTAMP_PATTERN,
+          sizeof(FUNCMAP_TIMESTAMP_PATTERN) - 1,
+          ZSTR_VAL(timestamp),
+          ZSTR_LEN(timestamp)
+      );
+      zend_string_free(old);
+
+      if (!new) {
+        break; // TODO log error
+      }
+      old = new;
 
 
         // Replace %hostname%
@@ -220,11 +220,11 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
         hostname,
             strlen(hostname)
         );
+        zend_string_free(old);
 
         if (!new) {
           break; // TODO log error
         }
-        zend_string_free(old);
         old = new;
 
         // Replace %message%
@@ -236,21 +236,20 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
           ZSTR_VAL(key),
           ZSTR_LEN(key)
         );
+        zend_string_free(old);
+
         if (!new) {
           break; // TODO log error
         }
 
-        zend_string_free(old);
         old = new;
 
         if (ZSTR_LEN(old) > 0) {
           printf("%s", ZSTR_VAL(old));
         }
-  } ZEND_HASH_FOREACH_END();
 
-  if (old) {
-    zend_string_free(old);
-  }
+        zend_string_free(old);
+  } ZEND_HASH_FOREACH_END();
 
   zend_hash_clean(&funcmap_hash);
 }
