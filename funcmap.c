@@ -66,32 +66,32 @@ int funcmap_is_cli();
 void (*funcmap_old_execute_internal)(zend_execute_data *current_execute_data, zval *return_value);
 
 char *escape_backslashes(const char *str, int str_len) {
-  int i, backslashes = 0;
+    int i, backslashes = 0;
 
-  //count backslashes
-  for (i = 0; i < str_len; i++) {
-    if (str[i] == '\\') {
-      backslashes++;
-    }
-  }
-
-  char *escaped_str = NULL;
-    char *p;
-    //escape the backslashes that LSD doesn't like
-    escaped_str = emalloc(str_len + backslashes + 1);
-    p = escaped_str;
-    for (i = 0; i < str_len + 1/* copy \0 */; i++) {
-      if (str[i] == '\\') {
-        *p = '\\';
-        p++;
-        *p = '\\';
-      } else {
-        *p = str[i];
-      }
-      p++;
+    //count backslashes
+    for (i = 0; i < str_len; i++) {
+        if (str[i] == '\\') {
+            backslashes++;
+        }
     }
 
-    return escaped_str;
+    char *escaped_str = NULL;
+        char *p;
+        //escape the backslashes that LSD doesn't like
+        escaped_str = emalloc(str_len + backslashes + 1);
+        p = escaped_str;
+        for (i = 0; i < str_len + 1/* copy \0 */; i++) {
+            if (str[i] == '\\') {
+                *p = '\\';
+                p++;
+                *p = '\\';
+            } else {
+                *p = str[i];
+            }
+            p++;
+        }
+
+      return escaped_str;
 }
 
 static char *fm_get_function_name(zend_execute_data *execute_data) /* {{{ */
@@ -176,85 +176,64 @@ static void php_funcmap_init_globals(zend_funcmap_globals *funcmap_globals) /* {
 
 static void php_funcmap_write_and_cleanup_map() /* {{{ */
 {
-  zend_string *old, *new, *key = NULL;
+    zend_string *old, *new, *key = NULL;
 
-  char hostname[256];
-  if (gethostname(hostname, sizeof(hostname))) {
-    // php_error_docref(NULL, E_WARNING, "Unable to fetch host [%d]: %s", errno, strerror(errno));
-    // TODO
-  }
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname))) {
+        php_error_docref(NULL, E_ERROR, "Unable to fetch host [%d]: %s", errno, strerror(errno));
+        return;
+    }
 
-  char *DATE_ATOM = "Y-m-d\\TH:i:sP";
+    char *DATE_ATOM = "Y-m-d\\TH:i:sP";
+    zend_string *timestamp = php_format_date(DATE_ATOM, strlen(DATE_ATOM), php_time(), 1);
+    if (!timestamp) {
+        php_error_docref(NULL, E_ERROR, "Unable to format date");
+        return;
+    }
 
-  zend_string *timestamp = php_format_date(DATE_ATOM, strlen(DATE_ATOM), php_time(), 1);
-  if (!timestamp) {
-    // TODO error
-  }
+    ZEND_HASH_FOREACH_STR_KEY(&funcmap_hash, key) {
+        old = zend_string_init(FUNCMAP_G(log_format), strlen(FUNCMAP_G(log_format)), 0);
 
-  ZEND_HASH_FOREACH_STR_KEY(&funcmap_hash, key) {
-      old = zend_string_init(FUNCMAP_G(log_format), strlen(FUNCMAP_G(log_format)), 0);
-
-      // Replace %timestamp%
-      new = php_str_to_str(
-          ZSTR_VAL(old),
-          ZSTR_LEN(old),
-          FUNCMAP_TIMESTAMP_PATTERN,
-          sizeof(FUNCMAP_TIMESTAMP_PATTERN) - 1,
-          ZSTR_VAL(timestamp),
-          ZSTR_LEN(timestamp)
-      );
-      zend_string_free(old);
-
-      if (!new) {
-        break; // TODO log error
-      }
-      old = new;
-
+        // Replace %timestamp%
+        new = php_str_to_str(ZSTR_VAL(old), ZSTR_LEN(old), FUNCMAP_TIMESTAMP_PATTERN, sizeof(FUNCMAP_TIMESTAMP_PATTERN) - 1, ZSTR_VAL(timestamp), ZSTR_LEN(timestamp));
+        zend_string_free(old);
+        if (!new) {
+            php_error_docref(NULL, E_ERROR, "Unable to replace timestamp");
+            break;
+        }
+        old = new;
 
         // Replace %hostname%
-        new = php_str_to_str(
-            ZSTR_VAL(old),
-            ZSTR_LEN(old),
-            FUNCMAP_HOSTNAME_PATTERN,
-            sizeof(FUNCMAP_HOSTNAME_PATTERN) - 1,
-        hostname,
-            strlen(hostname)
-        );
+        new = php_str_to_str(ZSTR_VAL(old), ZSTR_LEN(old), FUNCMAP_HOSTNAME_PATTERN, sizeof(FUNCMAP_HOSTNAME_PATTERN) - 1, hostname, strlen(hostname));
         zend_string_free(old);
-
         if (!new) {
-          break; // TODO log error
+            php_error_docref(NULL, E_ERROR, "Unable to replace hostname");
+            break;
         }
         old = new;
 
         // Replace %message%
         char *method_name = escape_backslashes(ZSTR_VAL(key), ZSTR_LEN(key));
-
-        new = php_str_to_str(
-          ZSTR_VAL(old),
-          ZSTR_LEN(old),
-          FUNCMAP_MESSAGE_PATTERN,
-          sizeof(FUNCMAP_MESSAGE_PATTERN) - 1,
-          method_name,
-          strlen(method_name)
-        );
+        new = php_str_to_str(ZSTR_VAL(old), ZSTR_LEN(old), FUNCMAP_MESSAGE_PATTERN, sizeof(FUNCMAP_MESSAGE_PATTERN) - 1, method_name, strlen(method_name));
         efree(method_name);
         zend_string_free(old);
 
         if (!new) {
-          break; // TODO log error
+            php_error_docref(NULL, E_ERROR, "Unable to replace message");
+            break;
         }
-
         old = new;
 
-        if (ZSTR_LEN(old) > 0) {
-          printf("%s", ZSTR_VAL(old));
+        if (ZSTR_LEN(old) == 0) {
+            php_error_docref(NULL, E_WARNING, "Log message is empty");
+            break;
         }
 
+        printf("%s\n", ZSTR_VAL(old));
         zend_string_free(old);
-  } ZEND_HASH_FOREACH_END();
+    } ZEND_HASH_FOREACH_END();
 
-  zend_hash_clean(&funcmap_hash);
+    zend_hash_clean(&funcmap_hash);
 }
 /* }}} */
 
@@ -291,10 +270,10 @@ static void php_funcmap_atfork_child(void) /* {{{ */
 /* {{{ PHP_INI
  */
 PHP_INI_BEGIN()
-    STD_PHP_INI_ENTRY("funcmap.enabled",         "0", PHP_INI_SYSTEM, OnUpdateBool, enabled, zend_funcmap_globals, funcmap_globals)
-    STD_PHP_INI_ENTRY("funcmap.log_format",       "{\"@timestamp\": \"%timestamp%\", \"@version\": 1, \"host\": \"%hostname%\", \"message\": \"%message%\"}\n", PHP_INI_ALL, OnUpdateString, log_format, zend_funcmap_globals, funcmap_globals)
-    STD_PHP_INI_ENTRY("funcmap.namespaces",       "", PHP_INI_ALL, OnUpdateString, namespaces, zend_funcmap_globals, funcmap_globals)
-    STD_PHP_INI_ENTRY("funcmap.probability",     "100", PHP_INI_SYSTEM, OnUpdateLong, probability, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.enabled", "0", PHP_INI_SYSTEM, OnUpdateBool, enabled, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.log_format", "{\"@timestamp\": \"%timestamp%\", \"@version\": 1, \"host\": \"%hostname%\", \"message\": \"%message%\"}", PHP_INI_ALL, OnUpdateString, log_format, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.namespaces", "", PHP_INI_ALL, OnUpdateString, namespaces, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.probability", "100", PHP_INI_SYSTEM, OnUpdateLong, probability, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.flush_interval_sec", "0", PHP_INI_ALL, OnUpdateLong, flush_interval_sec, zend_funcmap_globals, funcmap_globals)
 PHP_INI_END()
 /* }}} */
@@ -312,24 +291,25 @@ PHP_MINIT_FUNCTION(funcmap)
 
 	REGISTER_INI_ENTRIES();
 
+        // Init namespace templates hasmap
         zend_hash_init(&namespaces, 1024, NULL, NULL, 1 /* persistent */);
 
         zend_string *zs_namespaces = zend_string_init(FUNCMAP_G(namespaces), strlen(FUNCMAP_G(namespaces)), 0);
         if (ZSTR_LEN(zs_namespaces) > 0) {
-          zend_string *delim = zend_string_init(",", 1, 0);
+            zend_string *delim = zend_string_init(",", 1, 0);
 
-          zval return_value;
-          zend_try_array_init(&return_value);
+            zval return_value;
+            zend_try_array_init(&return_value);
 
-          php_explode(delim, zs_namespaces, &return_value, 50);
-          zend_string_free(zs_namespaces);
+            php_explode(delim, zs_namespaces, &return_value, 50);
+            zend_string_free(zs_namespaces);
 
-          zval *val2;
-          ZEND_HASH_FOREACH_VAL(return_value.value.arr, val2) {
-            zend_hash_str_add_empty_element(&namespaces, ZSTR_VAL(val2->value.str), ZSTR_LEN(val2->value.str));
-          } ZEND_HASH_FOREACH_END();
+            zval *val2;
+            ZEND_HASH_FOREACH_VAL(return_value.value.arr, val2) {
+                zend_hash_str_add_empty_element(&namespaces, ZSTR_VAL(val2->value.str), ZSTR_LEN(val2->value.str));
+            } ZEND_HASH_FOREACH_END();
 
-          zend_hash_release(Z_ARRVAL(return_value));
+            zend_hash_release(Z_ARRVAL(return_value));
         }
 
         return SUCCESS;
@@ -395,17 +375,17 @@ PHP_RINIT_FUNCTION(funcmap)
  */
 PHP_RSHUTDOWN_FUNCTION(funcmap)
 {
-	if (!FUNCMAP_G(enabled)) {
-		return SUCCESS;
-	}
+    if (!FUNCMAP_G(enabled)) {
+        return SUCCESS;
+    }
 
-        if (funcmap_is_cli()) {
-          if (funcmap_enabled_real) {
+    if (funcmap_is_cli()) {
+        if (funcmap_enabled_real) {
             php_funcmap_write_and_cleanup_map();
-          }
         }
+    }
 
-	return SUCCESS;
+    return SUCCESS;
 }
 /* }}} */
 
@@ -487,45 +467,45 @@ int funcmap_is_cli()
     return strcmp(sapi_module.name, "cli") == 0;
 }
 
-int funcmap_namespace_is_matched(char *fname) {
-  if (namespaces.nNumOfElements == 0) {
-    return 1;
-  }
-
-  zend_string *key;
-  ZEND_HASH_FOREACH_STR_KEY(&namespaces, key) {
-    if(strstr(fname, ZSTR_VAL(key))) {
-      return 1;
+int funcmap_namespace_is_matched(char *fqcn_method)
+{
+    if (namespaces.nNumOfElements == 0) {
+        return 1;
     }
-  } ZEND_HASH_FOREACH_END();
 
-  return 0;
+    zend_string *key;
+    ZEND_HASH_FOREACH_STR_KEY(&namespaces, key) {
+        if(strstr(fqcn_method, ZSTR_VAL(key))) {
+            return 1;
+        }
+    } ZEND_HASH_FOREACH_END();
+
+    return 0;
 }
 
 void funcmap_execute_ex(zend_execute_data *execute_data) /* {{{ */
 {
-	//funcmap_enabled_real is set per-process
-	if (funcmap_enabled_real) {
-		char *fname = fm_get_function_name(execute_data);
-		if (fname) {
-                  if (funcmap_namespace_is_matched(fname)) {
-                    zend_hash_str_add_empty_element(&funcmap_hash, fname,
-                                                    strlen(fname));
-                  }
-                  efree(fname);
-                }
+    //funcmap_enabled_real is set per-process
+    if (funcmap_enabled_real) {
+        char *fname = fm_get_function_name(execute_data);
+        if (fname) {
+            if (funcmap_namespace_is_matched(fname)) {
+                zend_hash_str_add_empty_element(&funcmap_hash, fname, strlen(fname));
+            }
+            efree(fname);
+        }
 
-		if (FUNCMAP_G(flush_interval_sec) > 0) {
-			time_t now = time(NULL);
+        if (FUNCMAP_G(flush_interval_sec) > 0) {
+            time_t now = time(NULL);
 
-			if (funcmap_next_flush_time < now) {
-				php_funcmap_write_and_cleanup_map();
-				funcmap_next_flush_time = now + FUNCMAP_G(flush_interval_sec);
-			}
-		}
-	}
+            if (funcmap_next_flush_time < now) {
+                php_funcmap_write_and_cleanup_map();
+                funcmap_next_flush_time = now + FUNCMAP_G(flush_interval_sec);
+            }
+        }
+    }
 
-	funcmap_old_execute_ex(execute_data);
+    funcmap_old_execute_ex(execute_data);
 }
 /* }}} */
 
