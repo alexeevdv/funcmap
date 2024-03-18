@@ -166,60 +166,15 @@ static void php_funcmap_init_globals(zend_funcmap_globals *funcmap_globals) /* {
 }
 /* }}} */
 
-static char *php_funcmap_get_logfile(void) /* {{{ */
+static void php_funcmap_write_and_cleanup_map() /* {{{ */
 {
-	char *logfile = FUNCMAP_G(logfile);
-	char *pid_pattern;
-
-	if (!logfile || logfile[0] == '\0') {
-		return NULL;
-	}
-
-	pid_pattern = strstr(logfile, "%pid%");
-	if (pid_pattern != NULL) {
-		char *real_logfile = NULL;
-		pid_t pid = getpid();
-
-		spprintf(&real_logfile, 1024,
-				"%.*s" ZEND_LONG_FMT "%s",
-				(int)(pid_pattern - logfile),
-				logfile,
-				(zend_long)pid,
-				pid_pattern + strlen("%pid%"));
-		return real_logfile;
-	}
-
-	return estrdup(logfile);
-}
-/* }}} */
-
-static void php_funcmap_write_and_cleanup_map(int in_shutdown) /* {{{ */
-{
-	char *logfile = php_funcmap_get_logfile();
-	
-	if (!logfile) {
-		zend_hash_clean(&funcmap_hash);
-		return;
-	}
-
-	FILE *fp = fopen(logfile, "a");
-	if (!fp) {
-		if (in_shutdown) {
-			fprintf(stderr, "failed to open file %s for writing: %s", logfile, strerror(errno));
-		} else {
-			zend_error(E_CORE_WARNING, "failed to open file %s for writing: %s", logfile, strerror(errno));
-		}
-		efree(logfile);
-		return;
-	}
-	efree(logfile);
-
+        char *log_string = NULL;
 	zend_string *key;
 	ZEND_HASH_FOREACH_STR_KEY(&funcmap_hash, key) {
-		fwrite(ZSTR_VAL(key), ZSTR_LEN(key), 1, fp);
+              spprintf(&log_string, 1024, FUNCMAP_G(log_format), ZSTR_VAL(key));
+              php_log_err_with_severity(log_string, LOG_DEBUG);
 	} ZEND_HASH_FOREACH_END();
 
-	fclose(fp);
 	zend_hash_clean(&funcmap_hash);
 }
 /* }}} */
@@ -258,7 +213,7 @@ static void php_funcmap_atfork_child(void) /* {{{ */
  */
 PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("funcmap.enabled",         "0", PHP_INI_SYSTEM, OnUpdateBool, enabled, zend_funcmap_globals, funcmap_globals)
-    STD_PHP_INI_ENTRY("funcmap.logfile",         "", PHP_INI_ALL, OnUpdateString, logfile, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.log_format",       "funcmap: %s", PHP_INI_ALL, OnUpdateString, log_format, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.probability",     "100", PHP_INI_SYSTEM, OnUpdateLong, probability, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.flush_interval_sec", "0", PHP_INI_ALL, OnUpdateLong, flush_interval_sec, zend_funcmap_globals, funcmap_globals)
 PHP_INI_END()
@@ -290,7 +245,7 @@ PHP_MSHUTDOWN_FUNCTION(funcmap)
 		zend_execute_ex = funcmap_old_execute_ex;
 
 		if (funcmap_enabled_real) {
-			php_funcmap_write_and_cleanup_map(1);
+			php_funcmap_write_and_cleanup_map();
 		}
 		zend_hash_destroy(&funcmap_hash);
 	}
@@ -383,7 +338,7 @@ static PHP_FUNCTION(funcmap_enable) /* {{{ */
 
 static PHP_FUNCTION(funcmap_flush) /* {{{ */
 {
-	php_funcmap_write_and_cleanup_map(0);
+	php_funcmap_write_and_cleanup_map();
 	RETURN_TRUE;
 }
 
@@ -433,7 +388,7 @@ void funcmap_execute_ex(zend_execute_data *execute_data) /* {{{ */
 			time_t now = time(NULL);
 
 			if (funcmap_next_flush_time < now) {
-				php_funcmap_write_and_cleanup_map(0);
+				php_funcmap_write_and_cleanup_map();
 				funcmap_next_flush_time = now + FUNCMAP_G(flush_interval_sec);
 			}
 		}
