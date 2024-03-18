@@ -65,6 +65,35 @@ void funcmap_execute_ex(zend_execute_data *execute_data);
 int funcmap_is_cli();
 void (*funcmap_old_execute_internal)(zend_execute_data *current_execute_data, zval *return_value);
 
+char *escape_backslashes(const char *str, int str_len) {
+  int i, backslashes = 0;
+
+  //count backslashes
+  for (i = 0; i < str_len; i++) {
+    if (str[i] == '\\') {
+      backslashes++;
+    }
+  }
+
+  char *escaped_str = NULL;
+    char *p;
+    //escape the backslashes that LSD doesn't like
+    escaped_str = emalloc(str_len + backslashes + 1);
+    p = escaped_str;
+    for (i = 0; i < str_len + 1/* copy \0 */; i++) {
+      if (str[i] == '\\') {
+        *p = '\\';
+        p++;
+        *p = '\\';
+      } else {
+        *p = str[i];
+      }
+      p++;
+    }
+
+    return escaped_str;
+}
+
 static char *fm_get_function_name(zend_execute_data *execute_data) /* {{{ */
 {
 	zend_bool free_classname = 0;
@@ -123,41 +152,11 @@ static char *fm_get_function_name(zend_execute_data *execute_data) /* {{{ */
 		class_name = (char *)get_active_class_name(&space);
 	}
 
-	char *escaped_fname = NULL;
 	if (function_name) {
-		int i, fname_len, backslashes = 0;
-
 		if (class_name[0] != '\0') {
-			fname_len = spprintf(&current_fname, 1024, "%s::%s", class_name, function_name);
+			 spprintf(&current_fname, 1024, "%s::%s", class_name, function_name);
 		} else {
-			fname_len = spprintf(&current_fname, 1024, "%s", function_name);
-		}
-
-		//count backslashes
-		for (i = 0; i < fname_len; i++) {
-			if (current_fname[i] == '\\') {
-				backslashes++;
-			}
-		}
-
-		if (backslashes == 0) {
-			escaped_fname = current_fname;
-		} else {
-			char *p;
-			//escape the backslashes that LSD doesn't like
-			escaped_fname = emalloc(fname_len + backslashes + 1);
-			p = escaped_fname;
-			for (i = 0; i < fname_len + 1/* copy \0 */; i++) {
-				if (current_fname[i] == '\\') {
-					*p = '\\';
-					p++;
-					*p = '\\';
-				} else {
-					*p = current_fname[i];
-				}
-				p++;
-			}
-			efree(current_fname);
+			 spprintf(&current_fname, 1024, "%s", function_name);
 		}
 	}
 
@@ -165,7 +164,7 @@ static char *fm_get_function_name(zend_execute_data *execute_data) /* {{{ */
 		efree(class_name);
 	}
 
-	return escaped_fname;
+	return current_fname;
 }
 /* }}} */
 
@@ -229,14 +228,17 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
         old = new;
 
         // Replace %message%
+        char *method_name = escape_backslashes(ZSTR_VAL(key), ZSTR_LEN(key));
+
         new = php_str_to_str(
           ZSTR_VAL(old),
           ZSTR_LEN(old),
           FUNCMAP_MESSAGE_PATTERN,
           sizeof(FUNCMAP_MESSAGE_PATTERN) - 1,
-          ZSTR_VAL(key),
-          ZSTR_LEN(key)
+          method_name,
+          strlen(method_name)
         );
+        efree(method_name);
         zend_string_free(old);
 
         if (!new) {
@@ -250,10 +252,6 @@ static void php_funcmap_write_and_cleanup_map() /* {{{ */
         }
 
         zend_string_free(old);
-  } ZEND_HASH_FOREACH_END();
-
-  ZEND_HASH_FOREACH_STR_KEY(&namespaces, key) {
-      printf("%s\n", ZSTR_VAL(key));
   } ZEND_HASH_FOREACH_END();
 
   zend_hash_clean(&funcmap_hash);
@@ -295,7 +293,7 @@ static void php_funcmap_atfork_child(void) /* {{{ */
 PHP_INI_BEGIN()
     STD_PHP_INI_ENTRY("funcmap.enabled",         "0", PHP_INI_SYSTEM, OnUpdateBool, enabled, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.log_format",       "{\"@timestamp\": \"%timestamp%\", \"@version\": 1, \"host\": \"%hostname%\", \"message\": \"%message%\"}\n", PHP_INI_ALL, OnUpdateString, log_format, zend_funcmap_globals, funcmap_globals)
-    STD_PHP_INI_ENTRY("funcmap.namespaces",       "Ext\\,Test\\,One\\\\Two", PHP_INI_ALL, OnUpdateString, namespaces, zend_funcmap_globals, funcmap_globals)
+    STD_PHP_INI_ENTRY("funcmap.namespaces",       "", PHP_INI_ALL, OnUpdateString, namespaces, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.probability",     "100", PHP_INI_SYSTEM, OnUpdateLong, probability, zend_funcmap_globals, funcmap_globals)
     STD_PHP_INI_ENTRY("funcmap.flush_interval_sec", "0", PHP_INI_ALL, OnUpdateLong, flush_interval_sec, zend_funcmap_globals, funcmap_globals)
 PHP_INI_END()
@@ -489,15 +487,33 @@ int funcmap_is_cli()
     return strcmp(sapi_module.name, "cli") == 0;
 }
 
+int funcmap_namespace_is_matched(char *fname) {
+  if (namespaces.nNumOfElements == 0) {
+    return 1;
+  }
+
+  zend_string *key;
+  ZEND_HASH_FOREACH_STR_KEY(&namespaces, key) {
+    if(strstr(fname, ZSTR_VAL(key))) {
+      return 1;
+    }
+  } ZEND_HASH_FOREACH_END();
+
+  return 0;
+}
+
 void funcmap_execute_ex(zend_execute_data *execute_data) /* {{{ */
 {
 	//funcmap_enabled_real is set per-process
 	if (funcmap_enabled_real) {
 		char *fname = fm_get_function_name(execute_data);
 		if (fname) {
-			zend_hash_str_add_empty_element(&funcmap_hash, fname, strlen(fname));
-			efree(fname);
-		}
+                  if (funcmap_namespace_is_matched(fname)) {
+                    zend_hash_str_add_empty_element(&funcmap_hash, fname,
+                                                    strlen(fname));
+                  }
+                  efree(fname);
+                }
 
 		if (FUNCMAP_G(flush_interval_sec) > 0) {
 			time_t now = time(NULL);
